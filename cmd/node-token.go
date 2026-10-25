@@ -37,6 +37,7 @@ server or agent to join the cluster.
 	command.Flags().Bool("local", false, "Use local machine instead of ssh client")
 	command.Flags().String("ssh-key", "~/.ssh/id_rsa", "The ssh key to use for remote login")
 	command.Flags().Int("ssh-port", 22, "The port on which to connect for ssh")
+	command.Flags().Bool("skip-host-key-check", false, "Skip SSH host key verification (insecure)")
 	command.Flags().Bool("sudo", true, "Use sudo for installation. e.g. set to false when using the root user and no sudo is available.")
 
 	command.Flags().Bool("print-command", false, "Print the command to be executed")
@@ -97,6 +98,7 @@ server or agent to join the cluster.
 		port, _ := command.Flags().GetInt("ssh-port")
 		user, _ := command.Flags().GetString("user")
 		sshKey, _ := command.Flags().GetString("ssh-key")
+		skipHostKeyCheck, _ := command.Flags().GetBool("skip-host-key-check")
 
 		dataDir, _ := command.Flags().GetString("server-data-dir")
 
@@ -117,7 +119,7 @@ server or agent to join the cluster.
 		if local {
 			operator = ssh.ExecOperator{}
 		} else {
-			sshOperator, sshOperatorDone, errored, err := connectOperator(user, address, sshKeyPath)
+			sshOperator, sshOperatorDone, errored, err := connectOperator(user, address, sshKeyPath, skipHostKeyCheck)
 			if errored {
 				return err
 			}

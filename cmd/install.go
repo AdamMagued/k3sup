@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
+	"golang.org/x/crypto/ssh/knownhosts"
 	"golang.org/x/term"
 )
 
@@ -92,6 +93,7 @@ func MakeInstall() *cobra.Command {
 
 	command.Flags().String("ssh-key", "~/.ssh/id_rsa", "The ssh key to use for remote login")
 	command.Flags().Int("ssh-port", 22, "The port on which to connect for ssh")
+	command.Flags().Bool("skip-host-key-check", false, "Skip SSH host key verification (insecure)")
 	command.Flags().Bool("sudo", true, "Use sudo for installation. e.g. set to false when using the root user and no sudo is available.")
 	command.Flags().Bool("skip-install", false, "Skip the k3s installer")
 
@@ -286,11 +288,12 @@ Provide the --local-path flag with --merge if a kubeconfig already exists in som
 		port, _ := command.Flags().GetInt("ssh-port")
 		user, _ := command.Flags().GetString("user")
 		sshKey, _ := command.Flags().GetString("ssh-key")
+		skipHostKeyCheck, _ := command.Flags().GetBool("skip-host-key-check")
 
 		sshKeyPath := expandPath(sshKey)
 		address := fmt.Sprintf("%s:%d", host, port)
 
-		sshOperator, sshOperatorDone, errored, err := connectOperator(user, address, sshKeyPath)
+		sshOperator, sshOperatorDone, errored, err := connectOperator(user, address, sshKeyPath, skipHostKeyCheck)
 		if errored {
 			return err
 		}
@@ -340,7 +343,7 @@ type DoneFunc func()
 // If the initial connection attempt fails fall through to the using
 // the supplied/default private key file
 // DoneFunc should be called by the caller to close the SSH connection when done
-func connectOperator(user string, address string, sshKeyPath string) (*operator.SSHOperator, DoneFunc, bool, error) {
+func connectOperator(user string, address string, sshKeyPath string, skipHostKeyCheck bool) (*operator.SSHOperator, DoneFunc, bool, error) {
 	var sshOperator *operator.SSHOperator
 	var initialSSHErr error
 	var closeSSHAgentFunc func() error
@@ -354,6 +357,11 @@ func connectOperator(user string, address string, sshKeyPath string) (*operator.
 		}
 	}
 
+	hostKeyCallback, err := getHostKeyCallback(skipHostKeyCheck)
+	if err != nil {
+		return nil, nil, true, fmt.Errorf("unable to configure host key verification: %w", err)
+	}
+
 	if runtime.GOOS != "windows" {
 		var sshAgentAuthMethod ssh.AuthMethod
 		sshAgentAuthMethod, initialSSHErr = sshAgentOnly()
@@ -362,7 +370,7 @@ func connectOperator(user string, address string, sshKeyPath string) (*operator.
 			config := &ssh.ClientConfig{
 				User:            user,
 				Auth:            []ssh.AuthMethod{sshAgentAuthMethod},
-				HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+				HostKeyCallback: hostKeyCallback,
 			}
 
 			sshOperator, initialSSHErr = operator.NewSSHOperator(address, config)
@@ -372,21 +380,30 @@ func connectOperator(user string, address string, sshKeyPath string) (*operator.
 	}
 
 	if initialSSHErr != nil {
+		var keyErr *knownhosts.KeyError
+		if errors.As(initialSSHErr, &keyErr) {
+			return nil, doneFunc, true, fmt.Errorf("host key verification failed for %s: %w (use --skip-host-key-check to bypass)", address, initialSSHErr)
+		}
+
 		publicKeyFileAuth, closeSSHAgent, err := loadPublickey(sshKeyPath)
 		if err != nil {
 			return nil, nil, true, fmt.Errorf("unable to load the ssh key with path %q: %w", sshKeyPath, err)
 		}
 
+		closeSSHAgentFunc = closeSSHAgent
 		defer closeSSHAgent()
 
 		config := &ssh.ClientConfig{
 			User:            user,
 			Auth:            []ssh.AuthMethod{publicKeyFileAuth},
-			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+			HostKeyCallback: hostKeyCallback,
 		}
 
 		sshOperator, err = operator.NewSSHOperator(address, config)
 		if err != nil {
+			if errors.As(err, &keyErr) {
+				return nil, doneFunc, true, fmt.Errorf("host key verification failed for %s: %w (use --skip-host-key-check to bypass)", address, err)
+			}
 			return nil, nil, true, fmt.Errorf("unable to connect to %s over ssh: %w", address, err)
 		}
 	}

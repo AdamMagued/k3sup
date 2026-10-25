@@ -43,6 +43,7 @@ func MakeGetConfig() *cobra.Command {
 	command.Flags().String("host", "", "Public hostname of node")
 	command.Flags().String("ssh-key", "~/.ssh/id_rsa", "The ssh key to use for remote login")
 	command.Flags().Int("ssh-port", 22, "The port on which to connect for ssh")
+	command.Flags().Bool("skip-host-key-check", false, "Skip SSH host key verification (insecure)")
 	command.Flags().Bool("sudo", true, "Use sudo for kubeconfig retrieval. e.g. set to false when using the root user and no sudo is available.")
 	command.Flags().String("local-path", "kubeconfig", "Local path to save the kubeconfig file")
 	command.Flags().String("context", "default", "Set the name of the kubeconfig context.")
@@ -134,11 +135,12 @@ Provide the --local-path flag with --merge if a kubeconfig already exists in som
 		port, _ := command.Flags().GetInt("ssh-port")
 		user, _ := command.Flags().GetString("user")
 		sshKey, _ := command.Flags().GetString("ssh-key")
+		skipHostKeyCheck, _ := command.Flags().GetBool("skip-host-key-check")
 
 		sshKeyPath := expandPath(sshKey)
 		address := fmt.Sprintf("%s:%d", host, port)
 
-		sshOperator, sshOperatorDone, errored, err := connectOperator(user, address, sshKeyPath)
+		sshOperator, sshOperatorDone, errored, err := connectOperator(user, address, sshKeyPath, skipHostKeyCheck)
 		if errored {
 			return err
 		}
